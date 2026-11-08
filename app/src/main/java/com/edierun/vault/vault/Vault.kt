@@ -28,7 +28,12 @@ data class VaultItem(
     val mime: String,
     val size: Long,
     val added: Long,
-    val hasThumb: Boolean
+    val hasThumb: Boolean,
+    val fav: Boolean = false,
+    /** Origem: "imp" (importado do telemóvel), "dl" (baixado da internet), "web" (página guardada). */
+    val src: String = "imp",
+    /** Duração em milissegundos (vídeo e áudio). */
+    val duration: Long = 0L
 ) {
     val kind: Kind
         get() = when {
@@ -83,7 +88,10 @@ class Vault internal constructor(
                     mime = o.getString("m"),
                     size = o.getLong("s"),
                     added = o.getLong("a"),
-                    hasThumb = o.optBoolean("t", false)
+                    hasThumb = o.optBoolean("t", false),
+                    fav = o.optBoolean("f", false),
+                    src = o.optString("o", "imp"),
+                    duration = o.optLong("d", 0L)
                 )
             }
         }
@@ -103,6 +111,9 @@ class Vault internal constructor(
                     .put("s", it.size)
                     .put("a", it.added)
                     .put("t", it.hasThumb)
+                    .put("f", it.fav)
+                    .put("o", it.src)
+                    .put("d", it.duration)
             )
         }
         FileUtil.atomicWrite(indexFile, Crypto.seal(key, arr.toString().toByteArray(Charsets.UTF_8), AAD_INDEX))
@@ -154,6 +165,7 @@ class Vault internal constructor(
         mime: String,
         input: InputStream,
         thumb: Bitmap? = null,
+        source: String = "imp",
         onBytes: (Long) -> Unit = {}
     ): VaultItem {
         checkOpen()
@@ -175,14 +187,37 @@ class Vault internal constructor(
             writer.abort()
             throw t
         }
+        durationTl.set(0L)
         val hasThumb = if (thumb != null) saveThumb(id, thumb) else makeThumb(id, mime)
-        val item = VaultItem(id, cleanName(name), mime, total, System.currentTimeMillis(), hasThumb)
+        val item = VaultItem(
+            id = id,
+            name = cleanName(name),
+            mime = mime,
+            size = total,
+            added = System.currentTimeMillis(),
+            hasThumb = hasThumb,
+            src = source,
+            duration = durationTl.get() ?: 0L
+        )
         synchronized(this) { saveIndex(_items.value + item) }
         return item
     }
 
-    fun importFile(file: File, name: String, mime: String, thumb: Bitmap? = null, onBytes: (Long) -> Unit = {}): VaultItem =
-        FileInputStream(file).use { importStream(name, mime, it, thumb, onBytes) }
+    fun importFile(
+        file: File,
+        name: String,
+        mime: String,
+        thumb: Bitmap? = null,
+        source: String = "imp",
+        onBytes: (Long) -> Unit = {}
+    ): VaultItem = FileInputStream(file).use { importStream(name, mime, it, thumb, source, onBytes) }
+
+    fun setFavorite(ids: Set<String>, fav: Boolean) {
+        checkOpen()
+        synchronized(this) {
+            saveIndex(_items.value.map { if (it.id in ids) it.copy(fav = fav) else it })
+        }
+    }
 
     /** Decifra um ficheiro para a área temporária privada (usado só pelo leitor de páginas offline). */
     fun decryptToTemp(item: VaultItem, dir: File): File {
@@ -270,11 +305,15 @@ class Vault internal constructor(
         }
     }
 
+    // duração lida ao gerar a miniatura; por linha de execução, porque podem decorrer várias importações ao mesmo tempo
+    private val durationTl = ThreadLocal<Long>()
+
     private fun mediaFrame(id: String, audio: Boolean): Bitmap? {
         val reader = EncryptedReader(dataFile(id), key)
         val mmr = MediaMetadataRetriever()
         try {
             mmr.setDataSource(EncryptedMediaDataSource(reader))
+            durationTl.set(mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L)
             val frame: Bitmap? = if (audio) {
                 mmr.embeddedPicture?.let { decodeSampled(it, THUMB_SIZE) }
             } else {

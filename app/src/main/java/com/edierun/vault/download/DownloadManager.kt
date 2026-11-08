@@ -222,7 +222,7 @@ object DownloadManager {
         files.forEach { f ->
             val total = f.length()
             update(id) { it.copy(status = JobStatus.SAVING, title = f.name, progress = 0f, detail = "A cifrar para o cofre…") }
-            vault.importFile(f, f.name, FileUtil.guessMime(f.name)) { done ->
+            vault.importFile(f, f.name, FileUtil.guessMime(f.name), source = "dl") { done ->
                 if (id in cancelled) throw CancellationException()
                 update(id) { it.copy(progress = done.toFloat() / total) }
             }
@@ -261,7 +261,7 @@ object DownloadManager {
                 val finalName = name ?: URLUtil.guessFileName(target, conn.getHeaderField("Content-Disposition"), finalMime)
                 update(id) { it.copy(title = finalName, detail = "A receber e a cifrar…") }
                 conn.inputStream.use { input ->
-                    vault.importStream(finalName, finalMime, input) { done ->
+                    vault.importStream(finalName, finalMime, input, source = "dl") { done ->
                         if (id in cancelled) throw CancellationException()
                         update(id) {
                             it.copy(

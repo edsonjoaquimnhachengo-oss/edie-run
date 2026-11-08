@@ -55,6 +55,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -169,7 +170,7 @@ fun BrowserScreen(
             scope.launch {
                 val saved = withContext(Dispatchers.IO) {
                     try {
-                        vault.importFile(file, "$title.mht", "multipart/related", thumb)
+                        vault.importFile(file, "$title.mht", "multipart/related", thumb, source = "web")
                         true
                     } catch (_: Throwable) {
                         false
@@ -187,98 +188,110 @@ fun BrowserScreen(
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
-        // ---------- barra superior: Tor, endereço, atalho
+    val ios = LocalIos.current
+    val toolbarSpace = LocalBottomInset.current + 66.dp
+
+    Box(Modifier.fillMaxSize().background(ios.background)) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().padding(bottom = toolbarSpace)) {
+            // ---------- barra de endereço (Tor · endereço · favorito)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                val torColor = when {
+                    !controller.torWanted -> ios.secondaryLabel
+                    torState == TorManager.State.READY && controller.proxyApplied -> ios.green
+                    torState == TorManager.State.ERROR -> ios.red
+                    else -> ios.orange
+                }
+                GlassIconButton(EdieIcons.Shield, "Tor", size = 42.dp, tint = torColor) {
+                    if (controller.torWanted) {
+                        controller.torWanted = false
+                        if (!DownloadManager.hasActive()) TorManager.stop(ctx)
+                        Toast.makeText(ctx, "Tor desligado", Toast.LENGTH_SHORT).show()
+                    } else {
+                        controller.torWanted = true
+                        if (torState == TorManager.State.ERROR) TorManager.stop(ctx)
+                        TorManager.start(ctx)
+                        Toast.makeText(ctx, "A ligar o Tor…", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                PrivateTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    hint = "Pesquisar ou escrever endereço",
+                    modifier = Modifier.weight(1f),
+                    imeAction = EditorInfo.IME_ACTION_GO,
+                    onAction = { controller.load(input) }
+                )
+                Spacer(Modifier.width(8.dp))
+                GlassIconButton(
+                    if (isShortcut) Icons.Filled.Star else EdieIcons.StarBorder,
+                    "Favorito",
+                    size = 42.dp,
+                    tint = if (isShortcut) ios.yellow else null,
+                    enabled = onSite
+                ) {
+                    if (isShortcut) {
+                        saveShortcuts(shortcuts.filterNot { it.host == currentHost })
+                        Toast.makeText(ctx, "Removido dos favoritos", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val t = controller.title.ifBlank { currentHost }.take(40)
+                        saveShortcuts(shortcuts + Shortcut(t, controller.url, controller.favicon?.let { ShortcutStore.scaleIcon(it) }))
+                        Toast.makeText(ctx, "Adicionado aos favoritos", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+
+            if (controller.progress in 1..99 && !controller.onHome) {
+                LinearProgressIndicator(
+                    progress = { controller.progress / 100f },
+                    color = ios.accent,
+                    trackColor = androidx.compose.ui.graphics.Color.Transparent,
+                    modifier = Modifier.fillMaxWidth().height(2.dp)
+                )
+            } else {
+                Spacer(Modifier.height(2.dp))
+            }
+
+            // ---------- conteúdo
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { controller.attach() }
+                )
+                if (controller.onHome) {
+                    HomePage(
+                        vault = vault,
+                        shortcuts = shortcuts,
+                        pages = items.filter { it.kind == Kind.PAGE }.sortedByDescending { it.added }.take(12),
+                        onOpenUrl = { controller.load(it) },
+                        onOpenItem = onOpenItem,
+                        onRemove = { s -> saveShortcuts(shortcuts.filterNot { it.url == s.url }) },
+                        onAdd = { title, url -> saveShortcuts(shortcuts + Shortcut(title, url)) }
+                    )
+                }
+                if (controller.torWanted && !controller.proxyApplied) {
+                    TorOverlay(controller, torState, torMessage, onRetry = {
+                        TorManager.stop(ctx)
+                        TorManager.start(ctx)
+                    })
+                }
+            }
+        }
+
+        // ---------- barra de ferramentas em vidro
         Row(
             Modifier
+                .align(Alignment.BottomCenter)
+                .padding(start = 18.dp, end = 18.dp, bottom = LocalBottomInset.current)
                 .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 4.dp, vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val torColor = when {
-                !controller.torWanted -> MaterialTheme.colorScheme.onSurfaceVariant
-                torState == TorManager.State.READY && controller.proxyApplied -> Color(0xFF6FCF97)
-                torState == TorManager.State.ERROR -> MaterialTheme.colorScheme.error
-                else -> Color(0xFFF2C94C)
-            }
-            IconButton(onClick = {
-                if (controller.torWanted) {
-                    controller.torWanted = false
-                    if (!DownloadManager.hasActive()) TorManager.stop(ctx)
-                    Toast.makeText(ctx, "Tor desligado", Toast.LENGTH_SHORT).show()
-                } else {
-                    controller.torWanted = true
-                    if (torState == TorManager.State.ERROR) TorManager.stop(ctx)
-                    TorManager.start(ctx)
-                    Toast.makeText(ctx, "A ligar o Tor…", Toast.LENGTH_SHORT).show()
-                }
-            }) {
-                Icon(EdieIcons.Shield, contentDescription = "Tor", tint = torColor)
-            }
-            PrivateTextField(
-                value = input,
-                onValueChange = { input = it },
-                hint = "Pesquisar ou escrever endereço",
-                modifier = Modifier.weight(1f),
-                imeAction = EditorInfo.IME_ACTION_GO,
-                onAction = { controller.load(input) }
-            )
-            IconButton(enabled = onSite, onClick = {
-                if (isShortcut) {
-                    saveShortcuts(shortcuts.filterNot { it.host == currentHost })
-                    Toast.makeText(ctx, "Atalho removido", Toast.LENGTH_SHORT).show()
-                } else {
-                    val t = controller.title.ifBlank { currentHost }.take(40)
-                    saveShortcuts(shortcuts + Shortcut(t, controller.url, controller.favicon?.let { ShortcutStore.scaleIcon(it) }))
-                    Toast.makeText(ctx, "Adicionado à página inicial", Toast.LENGTH_SHORT).show()
-                }
-            }) {
-                Icon(
-                    if (isShortcut) Icons.Filled.Star else EdieIcons.StarBorder,
-                    contentDescription = "Atalho",
-                    tint = if (isShortcut) Color(0xFFF2C94C) else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-
-        if (controller.progress in 1..99 && !controller.onHome) {
-            LinearProgressIndicator(
-                progress = { controller.progress / 100f },
-                modifier = Modifier.fillMaxWidth().height(2.dp)
-            )
-        } else {
-            Spacer(Modifier.height(2.dp))
-        }
-
-        // ---------- conteúdo
-        Box(Modifier.weight(1f).fillMaxWidth()) {
-            AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { controller.attach() }
-            )
-            if (controller.onHome) {
-                HomePage(
-                    vault = vault,
-                    shortcuts = shortcuts,
-                    pages = items.filter { it.kind == Kind.PAGE }.take(12),
-                    onOpenUrl = { controller.load(it) },
-                    onOpenItem = onOpenItem,
-                    onRemove = { s -> saveShortcuts(shortcuts.filterNot { it.url == s.url }) },
-                    onAdd = { title, url -> saveShortcuts(shortcuts + Shortcut(title, url)) }
-                )
-            }
-            if (controller.torWanted && !controller.proxyApplied) {
-                TorOverlay(controller, torState, torMessage, onRetry = {
-                    TorManager.stop(ctx)
-                    TorManager.start(ctx)
-                })
-            }
-        }
-
-        // ---------- barra inferior com ícones
-        Row(
-            Modifier.fillMaxWidth().padding(horizontal = 2.dp),
+                .height(54.dp)
+                .glass(RoundedCornerShape(27.dp), haze = null)
+                .padding(horizontal = 4.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -307,18 +320,18 @@ fun BrowserScreen(
     }
 
     imageToSave?.let { src ->
-        AlertDialog(
-            onDismissRequest = { imageToSave = null },
-            title = { Text("Guardar imagem no cofre?") },
-            text = { Text(src.take(140), style = MaterialTheme.typography.bodySmall) },
-            confirmButton = {
-                TextButton(onClick = {
+        IosAlert(
+            title = "Guardar imagem no cofre?",
+            message = src.take(120),
+            onDismiss = { imageToSave = null },
+            actions = listOf(
+                AlertAction("Cancelar") { imageToSave = null },
+                AlertAction("Guardar", bold = true) {
                     imageToSave = null
                     DownloadManager.enqueueDirect(vault, src, null, null)
                     Toast.makeText(ctx, "A guardar no cofre…", Toast.LENGTH_SHORT).show()
-                }) { Text("Guardar") }
-            },
-            dismissButton = { TextButton(onClick = { imageToSave = null }) { Text("Cancelar") } }
+                }
+            )
         )
     }
 }
@@ -331,18 +344,21 @@ private fun ToolButton(
     highlight: Boolean = false,
     onClick: () -> Unit
 ) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        IconButton(onClick = onClick, enabled = enabled) {
-            Icon(
-                icon,
-                contentDescription = label,
-                tint = when {
-                    !enabled -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
-                    highlight -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.onSurface
-                }
-            )
-        }
+    val ios = LocalIos.current
+    Box(
+        Modifier.size(44.dp).iosClick(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            icon,
+            contentDescription = label,
+            tint = when {
+                !enabled -> ios.tertiaryLabel
+                highlight -> ios.accent
+                else -> ios.accent.copy(alpha = 0.95f)
+            },
+            modifier = Modifier.size(24.dp)
+        )
     }
 }
 
@@ -388,12 +404,6 @@ private fun TorOverlay(controller: BrowserController, torState: TorManager.State
 
 // ---------------------------------------------------------------- página inicial
 
-private val tileColors = listOf(
-    Color(0xFF3A5F8F), Color(0xFF8F3A4E), Color(0xFF3A8F6B), Color(0xFF8F6B3A),
-    Color(0xFF5E3A8F), Color(0xFF3A848F), Color(0xFF8F3A84), Color(0xFF6B8F3A)
-)
-
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun HomePage(
     vault: Vault,
@@ -404,42 +414,33 @@ private fun HomePage(
     onRemove: (Shortcut) -> Unit,
     onAdd: (String, String) -> Unit
 ) {
+    val ios = LocalIos.current
     var toRemove by remember { mutableStateOf<Shortcut?>(null) }
     var adding by remember { mutableStateOf(false) }
 
     Column(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
+            .background(ios.groupedBackground)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 18.dp)
+            .padding(vertical = 14.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(EdieIcons.Globe, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(30.dp))
-            Spacer(Modifier.width(10.dp))
-            Column {
-                Text("Edie Run", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-                Text(
-                    "Navegação privada. Nada fica guardado ao fechar o cofre.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        Spacer(Modifier.height(22.dp))
+        Text("Favoritos", style = IosType.title2, color = ios.label, modifier = Modifier.padding(horizontal = 20.dp))
+        Spacer(Modifier.height(14.dp))
 
-        // atalhos em linhas de 4
+        // favoritos em linhas de 4, como no Safari
         val cells: List<Shortcut?> = shortcuts + listOf(null) // o último é "Adicionar"
         cells.chunked(4).forEach { row ->
-            Row(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
                 row.forEach { s ->
                     Column(
                         Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(12.dp))
-                            .combinedClickable(
-                                onClick = { if (s == null) adding = true else onOpenUrl(s.url) },
-                                onLongClick = { if (s != null) toRemove = s }
+                            .iosClick(
+                                pressedAlpha = 0.6f,
+                                pressedScale = 0.94f,
+                                onLongClick = { if (s != null) toRemove = s },
+                                onClick = { if (s == null) adding = true else onOpenUrl(s.url) }
                             )
                             .padding(vertical = 8.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
@@ -448,7 +449,8 @@ private fun HomePage(
                         Spacer(Modifier.height(6.dp))
                         Text(
                             s?.title ?: "Adicionar",
-                            fontSize = 12.sp,
+                            style = IosType.caption,
+                            color = ios.label,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 4.dp)
@@ -459,88 +461,113 @@ private fun HomePage(
             }
         }
 
-        Spacer(Modifier.height(24.dp))
-        Text("Páginas guardadas (offline)", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(26.dp))
+        Text("Páginas guardadas", style = IosType.title2, color = ios.label, modifier = Modifier.padding(horizontal = 20.dp))
+        Spacer(Modifier.height(10.dp))
         if (pages.isEmpty()) {
             Text(
-                "Abra um site e toque no ícone de guardar offline (o círculo com o visto), na barra de baixo. " +
+                "Abra um site e toque no ícone do círculo com o visto, na barra de baixo. " +
                     "A página fica cifrada no cofre e abre-se sem internet.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = IosType.footnote,
+                color = ios.secondaryLabel,
+                modifier = Modifier.padding(horizontal = 20.dp)
             )
         } else {
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 pages.forEach { p -> SavedPageCard(vault, p) { onOpenItem(p) } }
             }
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(8.dp))
             Text(
-                "Todas as páginas guardadas estão também no Cofre, no filtro Páginas.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                "Todas as páginas guardadas estão também no Cofre, em Colecções.",
+                style = IosType.footnote,
+                color = ios.secondaryLabel,
+                modifier = Modifier.padding(horizontal = 20.dp)
             )
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(18.dp))
+        Text(
+            "Navegação privada: nada fica guardado quando fecha o cofre.",
+            style = IosType.footnote,
+            color = ios.tertiaryLabel,
+            modifier = Modifier.padding(horizontal = 20.dp)
+        )
     }
 
     toRemove?.let { s ->
-        AlertDialog(
-            onDismissRequest = { toRemove = null },
-            title = { Text("Remover \"${s.title}\"?") },
-            text = { Text("O atalho sai da página inicial.") },
-            confirmButton = { TextButton(onClick = { onRemove(s); toRemove = null }) { Text("Remover") } },
-            dismissButton = { TextButton(onClick = { toRemove = null }) { Text("Cancelar") } }
+        IosAlert(
+            title = "Remover \"${s.title}\"?",
+            message = "Sai dos favoritos da página inicial.",
+            onDismiss = { toRemove = null },
+            actions = listOf(
+                AlertAction("Cancelar", bold = true) { toRemove = null },
+                AlertAction("Remover", destructive = true) {
+                    onRemove(s)
+                    toRemove = null
+                }
+            )
         )
     }
 
     if (adding) {
         var title by remember { mutableStateOf("") }
         var url by remember { mutableStateOf("") }
-        AlertDialog(
-            onDismissRequest = { adding = false },
-            title = { Text("Novo atalho") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PrivateTextField(title, { title = it }, "Nome (ex.: Notícias)")
-                    PrivateTextField(url, { url = it }, "Endereço (ex.: site.co.mz)")
-                }
-            },
-            confirmButton = {
-                TextButton(enabled = url.isNotBlank(), onClick = {
+        IosAlert(
+            title = "Novo favorito",
+            onDismiss = { adding = false },
+            actions = listOf(
+                AlertAction("Cancelar") { adding = false },
+                AlertAction("Adicionar", bold = true, enabled = url.isNotBlank()) {
                     var u = url.trim()
                     if (!u.startsWith("http://") && !u.startsWith("https://")) u = "https://$u"
                     onAdd(title.trim().ifBlank { hostOf(u) }.take(40), u)
                     adding = false
-                }) { Text("Adicionar") }
-            },
-            dismissButton = { TextButton(onClick = { adding = false }) { Text("Cancelar") } }
-        )
+                }
+            )
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PrivateTextField(title, { title = it }, "Nome (ex.: Notícias)", modifier = Modifier.fillMaxWidth())
+                PrivateTextField(url, { url = it }, "Endereço (ex.: site.co.mz)", modifier = Modifier.fillMaxWidth())
+            }
+        }
     }
 }
 
+private val tileColors = listOf(
+    Color(0xFF3A5F8F), Color(0xFF8F3A4E), Color(0xFF3A8F6B), Color(0xFF8F6B3A),
+    Color(0xFF5E3A8F), Color(0xFF3A848F), Color(0xFF8F3A84), Color(0xFF6B8F3A)
+)
+
 @Composable
 private fun ShortcutIcon(s: Shortcut?) {
-    val bg = if (s == null) MaterialTheme.colorScheme.surfaceVariant
-    else tileColors[(s.host.hashCode() and 0x7fffffff) % tileColors.size]
+    val ios = LocalIos.current
+    val bg = when {
+        s == null -> ios.fill
+        s.icon != null -> ios.cell
+        else -> tileColors[(s.host.hashCode() and 0x7fffffff) % tileColors.size]
+    }
     Box(
         Modifier
-            .size(54.dp)
-            .clip(CircleShape)
-            .background(if (s?.icon != null) Color.White else bg),
+            .size(64.dp)
+            .shadow(if (ios.isDark || s == null) 0.dp else 4.dp, RoundedCornerShape(15.dp))
+            .clip(RoundedCornerShape(15.dp))
+            .background(bg),
         contentAlignment = Alignment.Center
     ) {
         when {
-            s == null -> Icon(Icons.Filled.Add, contentDescription = null)
+            s == null -> Icon(Icons.Filled.Add, contentDescription = null, tint = ios.secondaryLabel, modifier = Modifier.size(28.dp))
             s.icon != null -> Image(
                 s.icon.asImageBitmap(),
                 contentDescription = null,
                 contentScale = ContentScale.Fit,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(36.dp)
             )
             else -> Text(
                 s.title.take(1).uppercase(),
                 color = Color.White,
-                fontSize = 22.sp,
+                fontSize = 26.sp,
                 fontWeight = FontWeight.SemiBold
             )
         }
@@ -549,34 +576,32 @@ private fun ShortcutIcon(s: Shortcut?) {
 
 @Composable
 private fun SavedPageCard(vault: Vault, item: VaultItem, onClick: () -> Unit) {
+    val ios = LocalIos.current
     val bmp by produceState<Bitmap?>(initialValue = null, item.id) {
         value = withContext(Dispatchers.IO) { vault.thumbnail(item) }
     }
     Column(
         Modifier
-            .width(130.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .combinedClickableCompat(onClick)
+            .width(140.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(ios.cell)
+            .iosClick(pressedAlpha = 0.6f, pressedScale = 0.96f, onClick = onClick)
     ) {
-        Box(Modifier.fillMaxWidth().height(90.dp).background(MaterialTheme.colorScheme.surfaceVariant)) {
+        Box(Modifier.fillMaxWidth().height(96.dp).background(ios.fill)) {
             val b = bmp
             if (b != null) {
                 Image(b.asImageBitmap(), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             } else {
-                Icon(EdieIcons.Globe, contentDescription = null, modifier = Modifier.align(Alignment.Center))
+                Icon(EdieIcons.Globe, contentDescription = null, tint = ios.secondaryLabel, modifier = Modifier.align(Alignment.Center))
             }
         }
         Text(
             item.name.removeSuffix(".mht"),
-            fontSize = 12.sp,
+            style = IosType.caption.copy(fontWeight = FontWeight.Medium),
+            color = ios.label,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(8.dp)
+            modifier = Modifier.padding(10.dp)
         )
     }
 }
-
-@OptIn(ExperimentalFoundationApi::class)
-private fun Modifier.combinedClickableCompat(onClick: () -> Unit): Modifier =
-    this.combinedClickable(onClick = onClick)

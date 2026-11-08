@@ -9,48 +9,20 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.widget.doAfterTextChanged
 import java.util.Locale
 
-private val EdieColors = darkColorScheme(
-    primary = Color(0xFF7FB8FF),
-    onPrimary = Color(0xFF00213F),
-    primaryContainer = Color(0xFF1D3A5C),
-    onPrimaryContainer = Color(0xFFD3E4FF),
-    secondary = Color(0xFFFFB86B),
-    onSecondary = Color(0xFF3B2200),
-    secondaryContainer = Color(0xFF4A3216),
-    onSecondaryContainer = Color(0xFFFFDDB8),
-    background = Color(0xFF0D1015),
-    onBackground = Color(0xFFE4E7EC),
-    surface = Color(0xFF12161C),
-    onSurface = Color(0xFFE4E7EC),
-    surfaceVariant = Color(0xFF232A33),
-    onSurfaceVariant = Color(0xFFBCC4CF),
-    surfaceContainer = Color(0xFF181D24),
-    surfaceContainerHigh = Color(0xFF1F252D),
-    error = Color(0xFFFF8A80)
-)
-
-@Composable
-fun EdieTheme(content: @Composable () -> Unit) {
-    MaterialTheme(colorScheme = EdieColors, content = content)
-}
-
 /**
- * Campo de texto que pede ao teclado para NÃO aprender nem guardar o que se escreve
- * (modo incógnito do teclado). Usado para links, pesquisas e PINs.
+ * Campo de texto ao estilo iOS que pede ao teclado para NÃO aprender nem guardar o que
+ * se escreve (modo incógnito do teclado). Usado para links, pesquisas e PINs.
  */
 @Composable
 fun PrivateTextField(
@@ -62,15 +34,17 @@ fun PrivateTextField(
     imeAction: Int = EditorInfo.IME_ACTION_DONE,
     onAction: () -> Unit = {}
 ) {
+    val ios = LocalIos.current
     val currentOnChange by rememberUpdatedState(onValueChange)
     val currentOnAction by rememberUpdatedState(onAction)
-    val textColor = MaterialTheme.colorScheme.onSurface.toArgb()
-    val hintColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f).toArgb()
+    val textColor = ios.label.toArgb()
+    val hintColor = ios.secondaryLabel.toArgb()
+    val cursor = ios.accent.toArgb()
     Box(
         modifier
-            .clip(RoundedCornerShape(14.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(horizontal = 4.dp)
+            .clip(RoundedCornerShape(11.dp))
+            .background(ios.fill)
+            .padding(horizontal = 2.dp)
     ) {
         AndroidView(
             modifier = Modifier.fillMaxWidth(),
@@ -78,12 +52,11 @@ fun PrivateTextField(
                 EditText(ctx).apply {
                     this.hint = hint
                     setSingleLine(true)
-                    setTextColor(textColor)
-                    setHintTextColor(hintColor)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
                     background = null
-                    val p = (10 * resources.displayMetrics.density).toInt()
-                    setPadding(p, p, p, p)
+                    val ph = (10 * resources.displayMetrics.density).toInt()
+                    val pv = (8 * resources.displayMetrics.density).toInt()
+                    setPadding(ph, pv, ph, pv)
                     imeOptions = imeAction or
                         EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or
                         EditorInfo.IME_FLAG_NO_EXTRACT_UI
@@ -102,6 +75,9 @@ fun PrivateTextField(
                 }
             },
             update = { et ->
+                et.setTextColor(textColor)
+                et.setHintTextColor(hintColor)
+                et.highlightColor = (cursor and 0x00FFFFFF) or 0x55000000
                 if (et.text.toString() != value) {
                     et.setText(value)
                     et.setSelection(value.length)
