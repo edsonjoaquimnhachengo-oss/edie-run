@@ -1,0 +1,57 @@
+name: Compilar APK do Edie Run
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Obter o código
+        uses: actions/checkout@v4
+
+      - name: Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Compilar
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon --stacktrace assembleRelease
+
+      - name: Preparar os APKs
+        run: |
+          mkdir -p out
+          cp app/build/outputs/apk/release/*arm64-v8a*.apk out/EdieRun-arm64.apk
+          cp app/build/outputs/apk/release/*armeabi-v7a*.apk out/EdieRun-arm32.apk
+          ls -lh out
+
+      - name: Guardar como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: EdieRun-apk
+          path: out/*.apk
+
+      - name: Publicar numa Release (download directo pelo telemóvel)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Edie Run · compilação ${{ github.run_number }}
+          body: |
+            Instale **EdieRun-arm64.apk** (quase todos os telemóveis dos últimos 7 anos).
+            Use **EdieRun-arm32.apk** só se o primeiro der erro de "app incompatível".
+          files: out/*.apk
