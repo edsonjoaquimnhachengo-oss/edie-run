@@ -20,7 +20,7 @@ import java.io.FileInputStream
 import java.io.InputStream
 import java.io.OutputStream
 
-enum class Kind { VIDEO, IMAGE, AUDIO, OTHER }
+enum class Kind { VIDEO, IMAGE, AUDIO, PAGE, OTHER }
 
 data class VaultItem(
     val id: String,
@@ -35,6 +35,8 @@ data class VaultItem(
             mime.startsWith("video/") -> Kind.VIDEO
             mime.startsWith("image/") -> Kind.IMAGE
             mime.startsWith("audio/") -> Kind.AUDIO
+            mime == "multipart/related" || mime == "message/rfc822" ||
+                name.endsWith(".mht", true) || name.endsWith(".mhtml", true) -> Kind.PAGE
             else -> Kind.OTHER
         }
 }
@@ -147,7 +149,13 @@ class Vault internal constructor(
     }
 
     /** Cifra um fluxo directamente para o cofre (nada fica em claro no disco). */
-    fun importStream(name: String, mime: String, input: InputStream, onBytes: (Long) -> Unit = {}): VaultItem {
+    fun importStream(
+        name: String,
+        mime: String,
+        input: InputStream,
+        thumb: Bitmap? = null,
+        onBytes: (Long) -> Unit = {}
+    ): VaultItem {
         checkOpen()
         val id = newId()
         val writer = EncryptedWriter(dataFile(id), key)
@@ -167,14 +175,23 @@ class Vault internal constructor(
             writer.abort()
             throw t
         }
-        val hasThumb = makeThumb(id, mime)
+        val hasThumb = if (thumb != null) saveThumb(id, thumb) else makeThumb(id, mime)
         val item = VaultItem(id, cleanName(name), mime, total, System.currentTimeMillis(), hasThumb)
         synchronized(this) { saveIndex(_items.value + item) }
         return item
     }
 
-    fun importFile(file: File, name: String, mime: String, onBytes: (Long) -> Unit = {}): VaultItem =
-        FileInputStream(file).use { importStream(name, mime, it, onBytes) }
+    fun importFile(file: File, name: String, mime: String, thumb: Bitmap? = null, onBytes: (Long) -> Unit = {}): VaultItem =
+        FileInputStream(file).use { importStream(name, mime, it, thumb, onBytes) }
+
+    /** Decifra um ficheiro para a área temporária privada (usado só pelo leitor de páginas offline). */
+    fun decryptToTemp(item: VaultItem, dir: File): File {
+        dir.mkdirs()
+        val ext = item.name.substringAfterLast('.', "bin").take(8)
+        val out = File(dir, Crypto.hex(Crypto.randomBytes(8)) + "." + ext)
+        openReader(item).use { r -> out.outputStream().use { o -> r.inputStream().copyTo(o, 256 * 1024) } }
+        return out
+    }
 
     fun exportTo(item: VaultItem, out: OutputStream) {
         openReader(item).use { r -> r.inputStream().copyTo(out, 256 * 1024) }
@@ -237,7 +254,12 @@ class Vault internal constructor(
             null
         }
         if (bmp == null) return false
+        return saveThumb(id, bmp)
+    }
+
+    private fun saveThumb(id: String, source: Bitmap): Boolean {
         return try {
+            val bmp = scaleDown(source, THUMB_SIZE)
             val out = ByteArrayOutputStream()
             bmp.compress(Bitmap.CompressFormat.JPEG, 82, out)
             FileUtil.atomicWrite(thumbFile(id), Crypto.seal(key, out.toByteArray(), AAD_THUMB))

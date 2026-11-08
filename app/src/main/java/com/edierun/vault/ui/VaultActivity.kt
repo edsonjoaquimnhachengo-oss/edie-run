@@ -129,7 +129,12 @@ private fun VaultRoot(vault: Vault, browser: BrowserController, onLock: () -> Un
             Box(Modifier.padding(pad).fillMaxSize()) {
                 when (tab) {
                     Tab.GALLERY -> GalleryScreen(vault, onOpen = { viewing = it })
-                    Tab.BROWSER -> BrowserScreen(browser, vault, onSentToDownloads = { tab = Tab.DOWNLOADS })
+                    Tab.BROWSER -> BrowserScreen(
+                        browser,
+                        vault,
+                        onSentToDownloads = { tab = Tab.DOWNLOADS },
+                        onOpenItem = { viewing = it }
+                    )
                     Tab.DOWNLOADS -> DownloadsScreen(vault, downloadPrefill, onPrefillUsed = { downloadPrefill = "" })
                     Tab.SETTINGS -> SettingsScreen(vault, onLock)
                 }
@@ -165,7 +170,7 @@ private fun VaultRoot(vault: Vault, browser: BrowserController, onLock: () -> Un
 
     BackHandler(
         enabled = viewing == null && browser.customView == null && tab != Tab.GALLERY &&
-            !(tab == Tab.BROWSER && browser.canBack)
+            !(tab == Tab.BROWSER && !browser.onHome)
     ) {
         tab = Tab.GALLERY
     }

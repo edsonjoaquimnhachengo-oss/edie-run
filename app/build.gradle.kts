@@ -14,8 +14,8 @@ android {
         applicationId = "com.edierun.vault"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     // Chave fixa: todas as compilações saem com a mesma assinatura, por isso

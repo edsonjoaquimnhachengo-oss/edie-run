@@ -78,7 +78,9 @@ object FileUtil {
         "heic" to "image/heic",
         "heif" to "image/heif",
         "bmp" to "image/bmp",
-        "avif" to "image/avif"
+        "avif" to "image/avif",
+        "mht" to "multipart/related",
+        "mhtml" to "multipart/related"
     )
 
     fun guessMime(name: String): String {

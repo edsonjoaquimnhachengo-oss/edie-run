@@ -91,6 +91,7 @@ fun GalleryScreen(vault: Vault, onOpen: (VaultItem) -> Unit) {
             "VIDEO" -> items.filter { it.kind == Kind.VIDEO }
             "IMAGE" -> items.filter { it.kind == Kind.IMAGE }
             "AUDIO" -> items.filter { it.kind == Kind.AUDIO }
+            "PAGE" -> items.filter { it.kind == Kind.PAGE }
             else -> items
         }
     }
@@ -178,7 +179,7 @@ fun GalleryScreen(vault: Vault, onOpen: (VaultItem) -> Unit) {
             Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            listOf("ALL" to "Tudo", "VIDEO" to "Vídeos", "IMAGE" to "Imagens", "AUDIO" to "Áudio").forEach { (k, label) ->
+            listOf("ALL" to "Tudo", "VIDEO" to "Vídeos", "IMAGE" to "Imagens", "AUDIO" to "Áudio", "PAGE" to "Páginas").forEach { (k, label) ->
                 FilterChip(selected = filter == k, onClick = { filter = k }, label = { Text(label) })
             }
         }
@@ -316,9 +317,13 @@ private fun Thumb(vault: Vault, item: VaultItem, selected: Boolean, modifier: Mo
                 fontSize = 18.sp
             )
         }
-        if (item.kind == Kind.VIDEO || item.kind == Kind.AUDIO) {
+        if (item.kind == Kind.VIDEO || item.kind == Kind.AUDIO || item.kind == Kind.PAGE) {
             Text(
-                if (item.kind == Kind.VIDEO) "▶" else "♪",
+                when (item.kind) {
+                    Kind.VIDEO -> "▶"
+                    Kind.AUDIO -> "♪"
+                    else -> "WEB"
+                },
                 color = Color.White,
                 fontSize = 14.sp,
                 modifier = Modifier

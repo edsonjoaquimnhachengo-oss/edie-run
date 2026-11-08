@@ -36,6 +36,8 @@ object Session {
         val v = vault ?: return
         vault = null
         StreamServer.stop()
+        // páginas offline decifradas temporariamente para leitura
+        FileUtil.wipeDir(java.io.File(ctx.noBackupFilesDir, "tmp/view"))
         if (!DownloadManager.isUsing(v)) v.close()
         if (!DownloadManager.hasActive()) TorManager.stop(ctx)
     }

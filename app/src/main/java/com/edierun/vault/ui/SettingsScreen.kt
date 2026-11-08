@@ -141,7 +141,7 @@ fun SettingsScreen(vault: Vault, onLock: () -> Unit) {
         }
 
         Text(
-            "Edie Run 1.0",
+            "Edie Run 1.1",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 8.dp, bottom = 24.dp)

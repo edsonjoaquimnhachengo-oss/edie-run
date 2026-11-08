@@ -49,6 +49,14 @@ class BrowserController(private val context: Context) {
         private set
     var customView by mutableStateOf<View?>(null)
         private set
+
+    /** Está na página inicial (atalhos e páginas guardadas), sem nenhum site aberto. */
+    var onHome by mutableStateOf(true)
+        private set
+
+    /** Ícone do site aberto, recebido do próprio site. */
+    var favicon by mutableStateOf<Bitmap?>(null)
+        private set
     private var customCallback: WebChromeClient.CustomViewCallback? = null
 
     /** O utilizador quer navegar pelo Tor. */
@@ -120,8 +128,16 @@ class BrowserController(private val context: Context) {
                 return if (block) WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))) else null
             }
 
-            override fun onPageStarted(view: WebView, u: String?, favicon: Bitmap?) {
-                if (u != null && !u.startsWith("data:")) url = u
+            override fun onPageStarted(view: WebView, u: String?, icon: Bitmap?) {
+                if (u == null || u.startsWith("data:")) return
+                if (u == "about:blank") {
+                    onHome = true
+                    url = ""
+                } else {
+                    onHome = false
+                    if (u != url) favicon = null
+                    url = u
+                }
                 refreshNav(view)
             }
 
@@ -130,7 +146,14 @@ class BrowserController(private val context: Context) {
             }
 
             override fun doUpdateVisitedHistory(view: WebView, u: String?, isReload: Boolean) {
-                if (u != null && !u.startsWith("data:")) url = u
+                if (u == null || u.startsWith("data:")) return
+                if (u == "about:blank") {
+                    onHome = true
+                    url = ""
+                } else {
+                    onHome = false
+                    url = u
+                }
                 refreshNav(view)
             }
         }
@@ -142,6 +165,10 @@ class BrowserController(private val context: Context) {
 
             override fun onReceivedTitle(view: WebView, t: String?) {
                 title = t ?: ""
+            }
+
+            override fun onReceivedIcon(view: WebView, icon: Bitmap?) {
+                if (icon != null) favicon = icon
             }
 
             override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
@@ -202,6 +229,8 @@ class BrowserController(private val context: Context) {
         if (raw.isBlank()) return
         var target = toUrl(raw)
         if (httpsOnly && target.startsWith("http://")) target = target.replaceFirst("http://", "https://")
+        onHome = false
+        url = target
         if (blockAll) {
             pendingLoad = target
             return
@@ -209,10 +238,41 @@ class BrowserController(private val context: Context) {
         webView.loadUrl(target)
     }
 
+    /** Volta à página inicial. Fica "about:blank" no histórico, para o botão recuar funcionar. */
     fun home() {
+        webView.stopLoading()
+        onHome = true
         url = ""
         title = ""
-        webView.loadDataWithBaseURL(null, startPage(), "text/html", "utf-8", null)
+        favicon = null
+        progress = 100
+        if (webView.url != null && webView.url != "about:blank") webView.loadUrl("about:blank")
+    }
+
+    /** Miniatura do que está no ecrã (para a página guardada). */
+    fun snapshot(maxWidth: Int = 360): Bitmap? {
+        val w = webView.width
+        val h = webView.height
+        if (w <= 0 || h <= 0) return null
+        return try {
+            val f = maxWidth.toFloat() / w
+            val bmp = Bitmap.createBitmap(maxWidth, (h * f).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(bmp)
+            canvas.scale(f, f)
+            webView.draw(canvas)
+            bmp
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /** Grava a página aberta (texto, imagens e estilo) num único ficheiro MHTML. */
+    fun saveArchive(file: java.io.File, done: (Boolean) -> Unit) {
+        try {
+            webView.saveWebArchive(file.absolutePath, false) { path -> done(path != null && file.length() > 0) }
+        } catch (_: Throwable) {
+            done(false)
+        }
     }
 
     /**
@@ -297,6 +357,8 @@ class BrowserController(private val context: Context) {
         }
         url = ""
         title = ""
+        favicon = null
+        onHome = true
     }
 
     fun destroy() {
@@ -306,30 +368,6 @@ class BrowserController(private val context: Context) {
             webView.destroy()
         } catch (_: Throwable) {
         }
-    }
-
-    private fun startPage(): String {
-        val q = searchBase
-        return """
-            <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-            <style>
-              body{background:#0d1015;color:#e4e7ec;font-family:sans-serif;margin:0;padding:28px 18px}
-              h1{font-weight:600;margin:24px 0 4px} p{color:#9aa3ae;margin:0 0 22px}
-              form{display:flex;gap:8px} input{flex:1;padding:14px;border-radius:12px;border:0;background:#232a33;color:#fff;font-size:16px}
-              button{padding:0 18px;border-radius:12px;border:0;background:#7fb8ff;color:#00213f;font-weight:600}
-              .g{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:26px}
-              .g a{display:block;padding:16px 6px;text-align:center;background:#181d24;border-radius:14px;color:#e4e7ec;text-decoration:none;font-size:14px}
-            </style></head><body>
-            <h1>Edie Run</h1><p>Navegação privada. Nada fica guardado quando fecha o cofre.</p>
-            <form onsubmit="location.href='$q'+encodeURIComponent(document.getElementById('q').value);return false;">
-              <input id="q" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Pesquisar ou escrever um endereço"><button>Ir</button>
-            </form>
-            <div class="g">
-              <a href="https://m.youtube.com">YouTube</a><a href="https://m.facebook.com">Facebook</a><a href="https://www.instagram.com">Instagram</a>
-              <a href="https://www.tiktok.com">TikTok</a><a href="https://x.com">X</a><a href="https://vimeo.com">Vimeo</a>
-              <a href="https://www.dailymotion.com">Dailymotion</a><a href="https://www.reddit.com">Reddit</a><a href="https://duckduckgo.com">DuckDuckGo</a>
-            </div></body></html>
-        """.trimIndent()
     }
 
     companion object {

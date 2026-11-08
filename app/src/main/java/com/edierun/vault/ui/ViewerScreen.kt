@@ -80,7 +80,13 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import com.edierun.vault.player.StreamServer
+import com.edierun.vault.vault.FileUtil
+import java.io.File
 import com.edierun.vault.vault.Kind
 import com.edierun.vault.vault.Vault
 import com.edierun.vault.vault.VaultItem
@@ -138,6 +144,7 @@ fun ViewerScreen(vault: Vault, item: VaultItem, onClose: () -> Unit, onNavigate:
             when (item.kind) {
                 Kind.VIDEO, Kind.AUDIO -> VlcPlayer(vault, item, topBar)
                 Kind.IMAGE -> ImageViewer(vault, item, topBar)
+                Kind.PAGE -> PageViewer(vault, item, topBar)
                 Kind.OTHER -> OtherViewer(topBar)
             }
         }
@@ -473,6 +480,64 @@ private class DrawablePainter(private val drawable: Drawable) : Painter() {
         drawIntoCanvas { canvas ->
             drawable.setBounds(0, 0, size.width.roundToInt(), size.height.roundToInt())
             drawable.draw(canvas.nativeCanvas)
+        }
+    }
+}
+
+// ---------------------------------------------------------------- páginas guardadas (offline)
+
+/**
+ * Lê uma página guardada sem qualquer acesso à internet: a rede e o JavaScript ficam desligados.
+ * O ficheiro é decifrado para a área privada da app só enquanto está aberto e é apagado ao fechar.
+ */
+@Composable
+private fun PageViewer(vault: Vault, item: VaultItem, topBar: @Composable () -> Unit) {
+    val ctx = LocalContext.current
+    val tempDir = remember { File(ctx.noBackupFilesDir, "tmp/view") }
+    val result by produceState<Result<File>?>(initialValue = null, item.id) {
+        value = withContext(Dispatchers.IO) { runCatching { vault.decryptToTemp(item, tempDir) } }
+    }
+    val file = result?.getOrNull()
+    DisposableEffect(file) {
+        onDispose { file?.let { f -> Thread { FileUtil.wipe(f) }.start() } }
+    }
+    Column(Modifier.fillMaxSize().background(Color.White)) {
+        Box(Modifier.background(Color.Black)) { topBar() }
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when {
+                file != null -> AndroidView(
+                    modifier = Modifier.fillMaxSize(),
+                    factory = { c ->
+                        WebView(c).apply {
+                            settings.javaScriptEnabled = false
+                            settings.blockNetworkLoads = true
+                            settings.allowFileAccess = true
+                            settings.allowContentAccess = false
+                            settings.cacheMode = WebSettings.LOAD_NO_CACHE
+                            settings.builtInZoomControls = true
+                            settings.displayZoomControls = false
+                            settings.loadWithOverviewMode = true
+                            settings.useWideViewPort = true
+                            webViewClient = object : WebViewClient() {
+                                // links dentro da página guardada não abrem nada (estamos offline)
+                                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
+                            }
+                            loadUrl(Uri.fromFile(file).toString())
+                        }
+                    },
+                    onRelease = { wv ->
+                        wv.stopLoading()
+                        wv.clearCache(true)
+                        wv.destroy()
+                    }
+                )
+                result != null -> Text(
+                    "Não foi possível abrir esta página.",
+                    color = Color.Black,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+                else -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+            }
         }
     }
 }
