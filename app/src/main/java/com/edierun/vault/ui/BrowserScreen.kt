@@ -366,12 +366,7 @@ fun BrowserScreen(
                     })
                 }
                 // botão de vídeo detectado, como no Opera Mini
-                AnimatedVisibility(
-                    visible = videoHere && !finding,
-                    enter = fadeIn() + scaleIn(initialScale = 0.8f),
-                    exit = fadeOut() + scaleOut(targetScale = 0.8f),
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(14.dp)
-                ) {
+                if (videoHere && !finding) Box(Modifier.align(Alignment.BottomEnd).padding(14.dp)) {
                     Row(
                         Modifier
                             .shadow(10.dp, CircleShape)
