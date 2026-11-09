@@ -118,7 +118,7 @@ enum class Album(val title: String) {
 /** Itens de um álbum, do mais antigo ao mais recente (o mais recente fica em baixo, como no iPhone). */
 fun albumItems(items: List<VaultItem>, album: Album): List<VaultItem> {
     val f = when (album) {
-        Album.ALL -> items
+        Album.ALL -> items.filter { it.kind != Kind.PAGE }
         Album.FAV -> items.filter { it.fav }
         Album.VIDEO -> items.filter { it.kind == Kind.VIDEO }
         Album.IMAGE -> items.filter { it.kind == Kind.IMAGE }
@@ -151,6 +151,8 @@ fun GalleryScreen(vault: Vault, onOpen: (ViewerRequest) -> Unit) {
     var confirmDelete by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<VaultItem?>(null) }
     var exportTarget by remember { mutableStateOf<VaultItem?>(null) }
+    var restoreItems by remember { mutableStateOf<List<VaultItem>>(emptyList()) }
+    val restorer = rememberGalleryRestorer(vault)
     val haze = rememberHazeState()
     val bottomInset = LocalBottomInset.current
 
@@ -295,9 +297,9 @@ fun GalleryScreen(vault: Vault, onOpen: (ViewerRequest) -> Unit) {
                 } else {
                     val subtitle = when {
                         selecting -> if (selection.isEmpty()) "Seleccione itens" else "${selection.size} seleccionado(s)"
-                        collections -> "${items.size} itens"
-                        items.isEmpty() -> "Vazio"
-                        else -> "${items.size} itens"
+                        collections -> "${items.count { it.kind != Kind.PAGE }} itens"
+                        items.none { it.kind != Kind.PAGE } -> "Vazio"
+                        else -> "${items.count { it.kind != Kind.PAGE }} itens"
                     }
                     IosLargeHeader(
                         title = if (collections) "Colecções" else "Biblioteca",
@@ -357,6 +359,9 @@ fun GalleryScreen(vault: Vault, onOpen: (ViewerRequest) -> Unit) {
                         Session.allowLeaving()
                         exporter.launch(one.name)
                     }
+                    ToolbarIcon(EdieIcons.Restore, "Devolver à galeria", enabled = sel.isNotEmpty()) {
+                        restoreItems = sel
+                    }
                     ToolbarIcon(if (allFav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder, "Favorito", enabled = sel.isNotEmpty()) {
                         val ids = selection
                         scope.launch(Dispatchers.IO) { vault.setFavorite(ids, !allFav) }
@@ -371,6 +376,16 @@ fun GalleryScreen(vault: Vault, onOpen: (ViewerRequest) -> Unit) {
                 }
             }
         }
+    }
+
+    if (restoreItems.isNotEmpty()) {
+        val list = restoreItems
+        RestoreDialog(
+            count = list.size,
+            onCopy = { restoreItems = emptyList(); endSelection(); restorer(list, false) },
+            onMove = { restoreItems = emptyList(); endSelection(); restorer(list, true) },
+            onDismiss = { restoreItems = emptyList() }
+        )
     }
 
     if (confirmDelete) {
@@ -679,7 +694,7 @@ private fun CollectionsView(
     onOpenAlbum: (Album) -> Unit
 ) {
     val ios = LocalIos.current
-    val mediaAlbums = listOf(Album.FAV, Album.VIDEO, Album.IMAGE, Album.AUDIO, Album.PAGE)
+    val mediaAlbums = listOf(Album.FAV, Album.VIDEO, Album.IMAGE, Album.AUDIO)
     LazyColumn(
         Modifier.fillMaxSize().background(ios.groupedBackground),
         contentPadding = PaddingValues(top = topPad, bottom = bottomPad)
@@ -707,6 +722,19 @@ private fun CollectionsView(
         }
         item {
             Spacer(Modifier.height(18.dp))
+            IosGroup(header = "Pastas") {
+                IosRow(
+                    "Páginas guardadas",
+                    subtitle = "Sites guardados para ler sem internet",
+                    icon = EdieIcons.Folder,
+                    iconBg = Color(0xFF0A84FF),
+                    value = albumItems(items, Album.PAGE).size.toString(),
+                    chevron = true,
+                    last = true,
+                    onClick = { onOpenAlbum(Album.PAGE) }
+                )
+            }
+            Spacer(Modifier.height(22.dp))
             IosGroup(header = "Origem") {
                 IosRow(
                     "Baixados da internet",

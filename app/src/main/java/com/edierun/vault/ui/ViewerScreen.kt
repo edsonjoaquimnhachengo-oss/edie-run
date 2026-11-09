@@ -169,6 +169,8 @@ fun ViewerScreen(vault: Vault, request: ViewerRequest, onClose: () -> Unit) {
     var showInfo by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
+    var restoring by remember { mutableStateOf(false) }
+    val restorer = rememberGalleryRestorer(vault)
     val current = list[pager.currentPage.coerceIn(0, list.lastIndex)]
     val activity = ctx.findActivity()
 
@@ -320,6 +322,7 @@ fun ViewerScreen(vault: Vault, request: ViewerRequest, onClose: () -> Unit) {
                     Session.allowLeaving()
                     exporter.launch(current.name)
                 }
+                ViewerAction(EdieIcons.Restore, "Devolver à galeria") { restoring = true }
                 ViewerAction(
                     if (current.fav) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
                     "Favorito",
@@ -363,6 +366,16 @@ fun ViewerScreen(vault: Vault, request: ViewerRequest, onClose: () -> Unit) {
         ) {
             PrivateTextField(newName, { newName = it }, "Nome", modifier = Modifier.fillMaxWidth())
         }
+    }
+
+    if (restoring) {
+        val item = current
+        RestoreDialog(
+            count = 1,
+            onCopy = { restoring = false; restorer(listOf(item), false) },
+            onMove = { restoring = false; restorer(listOf(item), true) },
+            onDismiss = { restoring = false }
+        )
     }
 
     if (confirmDelete) {

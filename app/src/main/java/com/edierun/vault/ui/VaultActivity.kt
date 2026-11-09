@@ -210,7 +210,7 @@ private fun VaultRoot(vault: Vault, browser: BrowserController, onLock: () -> Un
 
     BackHandler(
         enabled = viewing == null && browser.customView == null && tab != Tab.GALLERY &&
-            !(tab == Tab.BROWSER && !browser.onHome)
+            !(tab == Tab.BROWSER && (!browser.onHome || browser.overlayOpen))
     ) {
         tab = Tab.GALLERY
     }

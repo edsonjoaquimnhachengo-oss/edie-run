@@ -215,7 +215,7 @@ fun SettingsScreen(vault: Vault, onLock: () -> Unit) {
         }
 
         Text(
-            "Edie Run 1.2",
+            "Edie Run 1.3",
             style = IosType.footnote,
             color = ios.secondaryLabel,
             textAlign = TextAlign.Center,

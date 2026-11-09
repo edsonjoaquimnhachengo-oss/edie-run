@@ -3,6 +3,8 @@ package com.edierun.vault.ui
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
@@ -17,6 +19,7 @@ import android.webkit.WebViewClient
 import android.webkit.WebViewDatabase
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.webkit.ProxyConfig
@@ -30,39 +33,55 @@ import java.io.ByteArrayInputStream
 import java.net.URLEncoder
 import java.util.concurrent.Executor
 
+/** Um separador do navegador. */
+class BrowserTab(val id: Long) {
+    lateinit var webView: WebView
+    var url by mutableStateOf("")
+    var title by mutableStateOf("")
+    var progress by mutableIntStateOf(100)
+    var canBack by mutableStateOf(false)
+    var canForward by mutableStateOf(false)
+    var onHome by mutableStateOf(true)
+    var favicon by mutableStateOf<Bitmap?>(null)
+    /** Último vídeo detectado na página (ficheiro ou lista de reprodução). */
+    var mediaUrl by mutableStateOf<String?>(null)
+    var desktop by mutableStateOf(false)
+    var snapshot by mutableStateOf<Bitmap?>(null)
+}
+
+data class HistoryEntry(val url: String, val title: String, val time: Long)
+
 /**
- * O navegador Edie Run. Funciona sempre em modo privado: sem cache em disco, sem
- * histórico guardado, sem formulários memorizados, sem cookies de terceiros.
- * Tudo o que a sessão criou é apagado quando o cofre fecha.
- * Com o Tor ligado, todo o tráfego do navegador passa pela rede Tor.
+ * O navegador Edie Run. Sempre privado: o histórico e a cache só existem durante a sessão
+ * e são apagados quando o cofre fecha. Com o Tor ligado, todo o tráfego passa pela rede Tor.
+ *
+ * Velocidade: cache de sessão activa, bloqueador de anúncios local, imagens mistas permitidas
+ * (fora do modo Tor), pré-renderização fora do ecrã. Nada passa por servidores de terceiros.
  */
 class BrowserController(private val context: Context) {
-    var url by mutableStateOf("")
+    val tabs = mutableStateListOf<BrowserTab>()
+    var currentIndex by mutableIntStateOf(0)
         private set
-    var title by mutableStateOf("")
-        private set
-    var progress by mutableIntStateOf(100)
-        private set
-    var canBack by mutableStateOf(false)
-        private set
-    var canForward by mutableStateOf(false)
-        private set
+    val current: BrowserTab get() = tabs[currentIndex.coerceIn(0, tabs.lastIndex)]
+
+    // atalhos para o separador actual
+    val url: String get() = current.url
+    val title: String get() = current.title
+    val progress: Int get() = current.progress
+    val canBack: Boolean get() = current.canBack
+    val canForward: Boolean get() = current.canForward
+    val onHome: Boolean get() = current.onHome
+    val favicon: Bitmap? get() = current.favicon
+    val webView: WebView get() = current.webView
+
     var customView by mutableStateOf<View?>(null)
-        private set
-
-    /** Está na página inicial (atalhos e páginas guardadas), sem nenhum site aberto. */
-    var onHome by mutableStateOf(true)
-        private set
-
-    /** Ícone do site aberto, recebido do próprio site. */
-    var favicon by mutableStateOf<Bitmap?>(null)
         private set
     private var customCallback: WebChromeClient.CustomViewCallback? = null
 
-    /** O utilizador quer navegar pelo Tor. */
-    var torWanted by mutableStateOf(false)
+    /** Há um painel aberto por cima do navegador (separadores, menu, páginas...). */
+    var overlayOpen by mutableStateOf(false)
 
-    /** O WebView já está configurado para usar o Tor. */
+    var torWanted by mutableStateOf(false)
     var proxyApplied by mutableStateOf(false)
         private set
     var torUnsupported by mutableStateOf(false)
@@ -71,22 +90,85 @@ class BrowserController(private val context: Context) {
     @Volatile private var blockAll = false
     @Volatile private var httpsOnly = false
 
+    // ---------- opções (estado para a interface + cópia volátil para as linhas de fundo)
+    var adBlock by mutableStateOf(true)
+        private set
+    @Volatile private var adBlockOn = true
+    var noImages by mutableStateOf(false)
+        private set
+    var nightSites by mutableStateOf(false)
+        private set
+    var textZoom by mutableIntStateOf(100)
+        private set
+    var blockedCount by mutableIntStateOf(0)
+        private set
+
+    val history = mutableStateListOf<HistoryEntry>()
+    var findResult by mutableStateOf("")
+        private set
+
     var searchBase = "https://duckduckgo.com/?q="
     var onDownloadRequest: ((url: String, mime: String?, name: String?) -> Unit)? = null
     var onImageLongPress: ((String) -> Unit)? = null
 
     private val direct = Executor { it.run() }
+    private val main = Handler(Looper.getMainLooper())
     private var pendingLoad: String? = null
+    private var nextId = 1L
 
-    val webView: WebView = createWebView()
+    val nightSupported: Boolean get() = WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)
+
+    init {
+        newTab()
+    }
+
+    // ---------------------------------------------------------------- separadores
+
+    fun newTab(open: String? = null) {
+        val tab = BrowserTab(nextId++)
+        tab.webView = createWebView(tab)
+        tabs.add(tab)
+        currentIndex = tabs.lastIndex
+        if (open != null) load(open)
+    }
+
+    fun switchTo(index: Int) {
+        if (index in tabs.indices) currentIndex = index
+    }
+
+    fun closeTab(index: Int) {
+        if (index !in tabs.indices) return
+        val t = tabs[index]
+        tabs.removeAt(index)
+        destroyWebView(t.webView)
+        if (tabs.isEmpty()) {
+            newTab()
+        } else {
+            if (index < currentIndex || currentIndex > tabs.lastIndex) currentIndex = (currentIndex - 1).coerceAtLeast(0)
+        }
+    }
+
+    fun closeAllTabs() {
+        val old = tabs.toList()
+        tabs.clear()
+        old.forEach { destroyWebView(it.webView) }
+        newTab()
+    }
+
+    fun captureSnapshot() {
+        current.snapshot = snapshot(400)
+    }
+
+    // ---------------------------------------------------------------- criação do WebView
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun createWebView(): WebView {
+    private fun createWebView(tab: BrowserTab): WebView {
         val wv = WebView(context)
         val s = wv.settings
         s.javaScriptEnabled = true
         s.domStorageEnabled = true
-        s.cacheMode = WebSettings.LOAD_NO_CACHE
+        // cache só desta sessão (apagada ao fechar o cofre): torna as páginas muito mais rápidas
+        s.cacheMode = WebSettings.LOAD_DEFAULT
         s.setGeolocationEnabled(false)
         s.allowFileAccess = false
         s.allowContentAccess = false
@@ -97,7 +179,9 @@ class BrowserController(private val context: Context) {
         s.displayZoomControls = false
         s.loadWithOverviewMode = true
         s.useWideViewPort = true
-        s.userAgentString = DownloadManager.USER_AGENT
+        s.loadsImagesAutomatically = true
+        s.offscreenPreRaster = true
+        applySettings(wv, tab)
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
             WebSettingsCompat.setSafeBrowsingEnabled(s, false)
         }
@@ -123,52 +207,71 @@ class BrowserController(private val context: Context) {
             }
 
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
-                val scheme = request.url.scheme?.lowercase()
-                val block = blockAll || (httpsOnly && scheme == "http")
-                return if (block) WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0))) else null
+                val u = request.url
+                val scheme = u.scheme?.lowercase()
+                if (blockAll || (httpsOnly && scheme == "http")) return empty()
+                if (adBlockOn && !request.isForMainFrame && AdBlock.isBlocked(u)) {
+                    main.post { blockedCount++ }
+                    return empty()
+                }
+                val str = u.toString()
+                if (!request.isForMainFrame && AdBlock.looksLikeMedia(str)) {
+                    main.post { tab.mediaUrl = str }
+                }
+                return null
             }
 
             override fun onPageStarted(view: WebView, u: String?, icon: Bitmap?) {
                 if (u == null || u.startsWith("data:")) return
                 if (u == "about:blank") {
-                    onHome = true
-                    url = ""
+                    tab.onHome = true
+                    tab.url = ""
                 } else {
-                    onHome = false
-                    if (u != url) favicon = null
-                    url = u
+                    tab.onHome = false
+                    if (u != tab.url) {
+                        tab.favicon = null
+                        tab.mediaUrl = null
+                    }
+                    tab.url = u
                 }
-                refreshNav(view)
+                refreshNav(tab)
             }
 
             override fun onPageFinished(view: WebView, u: String?) {
-                refreshNav(view)
+                refreshNav(tab)
             }
 
             override fun doUpdateVisitedHistory(view: WebView, u: String?, isReload: Boolean) {
                 if (u == null || u.startsWith("data:")) return
                 if (u == "about:blank") {
-                    onHome = true
-                    url = ""
+                    tab.onHome = true
+                    tab.url = ""
                 } else {
-                    onHome = false
-                    url = u
+                    tab.onHome = false
+                    tab.url = u
+                    if (!isReload && (history.isEmpty() || history.last().url != u)) {
+                        history.add(HistoryEntry(u, view.title ?: u, System.currentTimeMillis()))
+                        if (history.size > 300) history.removeAt(0)
+                    }
                 }
-                refreshNav(view)
+                refreshNav(tab)
             }
         }
 
         wv.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView, newProgress: Int) {
-                progress = newProgress
+                tab.progress = newProgress
             }
 
             override fun onReceivedTitle(view: WebView, t: String?) {
-                title = t ?: ""
+                tab.title = t ?: ""
+                if (t != null && history.isNotEmpty() && history.last().url == tab.url) {
+                    history[history.lastIndex] = history.last().copy(title = t)
+                }
             }
 
             override fun onReceivedIcon(view: WebView, icon: Bitmap?) {
-                if (icon != null) favicon = icon
+                if (icon != null) tab.favicon = icon
             }
 
             override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
@@ -198,18 +301,100 @@ class BrowserController(private val context: Context) {
             }
             false
         }
+
+        wv.setFindListener { active, count, _ ->
+            if (tab === current) findResult = if (count == 0) "0/0" else "${active + 1}/$count"
+        }
         return wv
     }
 
-    private fun refreshNav(view: WebView) {
-        canBack = view.canGoBack()
-        canForward = view.canGoForward()
+    private fun empty() = WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(EMPTY))
+
+    private fun applySettings(wv: WebView, tab: BrowserTab) {
+        val s = wv.settings
+        s.blockNetworkImage = noImages
+        s.textZoom = textZoom
+        s.userAgentString = if (tab.desktop) DESKTOP_UA else DownloadManager.USER_AGENT
+        // imagens http dentro de sites https: permitidas (senão muitas imagens não aparecem), excepto no modo Tor
+        s.mixedContentMode = if (httpsOnly) WebSettings.MIXED_CONTENT_NEVER_ALLOW else WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        if (nightSupported) {
+            try {
+                WebSettingsCompat.setAlgorithmicDarkeningAllowed(s, nightSites)
+            } catch (_: Throwable) { }
+        }
     }
 
-    /** Devolve o WebView pronto a ser colocado no ecrã. */
+    private fun applyAll() {
+        tabs.forEach { applySettings(it.webView, it) }
+    }
+
+    private fun refreshNav(tab: BrowserTab) {
+        tab.canBack = tab.webView.canGoBack()
+        tab.canForward = tab.webView.canGoForward()
+    }
+
+    // ---------------------------------------------------------------- opções
+
+    fun configure(adBlock: Boolean, noImages: Boolean, nightSites: Boolean, textZoom: Int) {
+        this.adBlock = adBlock
+        adBlockOn = adBlock
+        this.noImages = noImages
+        this.nightSites = nightSites
+        this.textZoom = textZoom.coerceIn(60, 200)
+        applyAll()
+    }
+
+    fun setAdBlockEnabled(on: Boolean) {
+        adBlock = on
+        adBlockOn = on
+        if (!onHome) webView.reload()
+    }
+
+    fun setNoImagesEnabled(on: Boolean) {
+        noImages = on
+        applyAll()
+        if (!onHome) webView.reload()
+    }
+
+    fun setNightSitesEnabled(on: Boolean) {
+        nightSites = on
+        applyAll()
+    }
+
+    fun changeTextZoom(delta: Int) {
+        textZoom = (textZoom + delta).coerceIn(60, 200)
+        applyAll()
+    }
+
+    fun toggleDesktop() {
+        val t = current
+        t.desktop = !t.desktop
+        applySettings(t.webView, t)
+        if (!t.onHome) t.webView.reload()
+    }
+
+    fun find(query: String) {
+        if (query.isBlank()) {
+            webView.clearMatches()
+            findResult = ""
+        } else {
+            webView.findAllAsync(query)
+        }
+    }
+
+    fun findNext(forward: Boolean) = webView.findNext(forward)
+
+    fun clearFind() {
+        webView.clearMatches()
+        findResult = ""
+    }
+
+    // ---------------------------------------------------------------- navegação
+
     fun attach(): WebView {
-        (webView.parent as? ViewGroup)?.removeView(webView)
-        return webView
+        val wv = webView
+        (wv.parent as? ViewGroup)?.removeView(wv)
+        return wv
     }
 
     fun exitFullscreen() {
@@ -229,44 +414,45 @@ class BrowserController(private val context: Context) {
         if (raw.isBlank()) return
         var target = toUrl(raw)
         if (httpsOnly && target.startsWith("http://")) target = target.replaceFirst("http://", "https://")
-        onHome = false
-        url = target
+        val t = current
+        t.onHome = false
+        t.url = target
         if (blockAll) {
             pendingLoad = target
             return
         }
-        webView.loadUrl(target)
+        t.webView.loadUrl(target)
     }
 
-    /** Volta à página inicial. Fica "about:blank" no histórico, para o botão recuar funcionar. */
     fun home() {
-        webView.stopLoading()
-        onHome = true
-        url = ""
-        title = ""
-        favicon = null
-        progress = 100
-        if (webView.url != null && webView.url != "about:blank") webView.loadUrl("about:blank")
+        val t = current
+        t.webView.stopLoading()
+        t.onHome = true
+        t.url = ""
+        t.title = ""
+        t.favicon = null
+        t.mediaUrl = null
+        t.progress = 100
+        if (t.webView.url != null && t.webView.url != "about:blank") t.webView.loadUrl("about:blank")
     }
 
-    /** Miniatura do que está no ecrã (para a página guardada). */
     fun snapshot(maxWidth: Int = 360): Bitmap? {
-        val w = webView.width
-        val h = webView.height
+        val wv = webView
+        val w = wv.width
+        val h = wv.height
         if (w <= 0 || h <= 0) return null
         return try {
             val f = maxWidth.toFloat() / w
             val bmp = Bitmap.createBitmap(maxWidth, (h * f).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
             val canvas = android.graphics.Canvas(bmp)
             canvas.scale(f, f)
-            webView.draw(canvas)
+            wv.draw(canvas)
             bmp
         } catch (_: Throwable) {
             null
         }
     }
 
-    /** Grava a página aberta (texto, imagens e estilo) num único ficheiro MHTML. */
     fun saveArchive(file: java.io.File, done: (Boolean) -> Unit) {
         try {
             webView.saveWebArchive(file.absolutePath, false) { path -> done(path != null && file.length() > 0) }
@@ -275,13 +461,14 @@ class BrowserController(private val context: Context) {
         }
     }
 
-    /**
-     * Sincroniza o navegador com o estado do Tor. Enquanto o Tor é pedido mas ainda
-     * não está pronto, todos os pedidos são bloqueados, para o IP real nunca sair.
-     */
+    // ---------------------------------------------------------------- Tor
+
     fun syncTor(state: TorManager.State) {
         if (torWanted) {
-            httpsOnly = true
+            if (!httpsOnly) {
+                httpsOnly = true
+                applyAll()
+            }
             if (state == TorManager.State.READY && !proxyApplied) {
                 if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) {
                     torUnsupported = true
@@ -293,7 +480,7 @@ class BrowserController(private val context: Context) {
                     .addProxyRule("127.0.0.1:${TorManager.httpPort}")
                     .build()
                 ProxyController.getInstance().setProxyOverride(cfg, direct) {
-                    webView.post {
+                    main.post {
                         proxyApplied = true
                         blockAll = false
                         clearSessionData()
@@ -310,10 +497,13 @@ class BrowserController(private val context: Context) {
                 }
             }
         } else {
-            httpsOnly = false
+            if (httpsOnly) {
+                httpsOnly = false
+                applyAll()
+            }
             if (proxyApplied) {
                 ProxyController.getInstance().clearProxyOverride(direct) {
-                    webView.post {
+                    main.post {
                         proxyApplied = false
                         blockAll = false
                         clearSessionData()
@@ -333,18 +523,22 @@ class BrowserController(private val context: Context) {
         CookieManager.getInstance().removeAllCookies(null)
         CookieManager.getInstance().flush()
         WebStorage.getInstance().deleteAllData()
-        webView.clearCache(true)
+        tabs.forEach { it.webView.clearCache(true) }
     }
 
-    /** Apaga tudo o que o navegador acumulou nesta sessão. */
+    // ---------------------------------------------------------------- limpeza
+
+    /** Apaga tudo o que o navegador acumulou nesta sessão (cache, cookies, histórico, formulários). */
     fun wipe() {
         try {
             exitFullscreen()
-            webView.stopLoading()
-            webView.loadUrl("about:blank")
-            webView.clearHistory()
-            webView.clearCache(true)
-            webView.clearFormData()
+            tabs.forEach { t ->
+                t.webView.stopLoading()
+                t.webView.clearHistory()
+                t.webView.clearCache(true)
+                t.webView.clearFormData()
+                t.webView.clearMatches()
+            }
             clearSessionData()
             @Suppress("DEPRECATION")
             WebViewDatabase.getInstance(context).clearFormData()
@@ -355,22 +549,33 @@ class BrowserController(private val context: Context) {
             proxyApplied = false
         } catch (_: Throwable) {
         }
-        url = ""
-        title = ""
-        favicon = null
-        onHome = true
+        history.clear()
+        blockedCount = 0
     }
 
-    fun destroy() {
-        wipe()
+    private fun destroyWebView(wv: WebView) {
         try {
-            (webView.parent as? ViewGroup)?.removeView(webView)
-            webView.destroy()
+            wv.stopLoading()
+            wv.clearHistory()
+            wv.clearCache(true)
+            (wv.parent as? ViewGroup)?.removeView(wv)
+            wv.destroy()
         } catch (_: Throwable) {
         }
     }
 
+    fun destroy() {
+        wipe()
+        tabs.forEach { destroyWebView(it.webView) }
+        tabs.clear()
+    }
+
     companion object {
+        private val EMPTY = ByteArray(0)
+
+        const val DESKTOP_UA =
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+
         /** Desactiva WebRTC, que pode revelar o IP real mesmo com proxy. */
         private const val NO_WEBRTC_JS = """
             (function(){try{
